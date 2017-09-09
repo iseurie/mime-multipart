@@ -35,8 +35,8 @@ use hyper::header::{ContentType, Headers, ContentDisposition, DispositionParam,
                     DispositionType, Charset};
 use tempdir::TempDir;
 use textnonce::TextNonce;
-use mime::{Attr, Mime, TopLevel, Value};
 use buf_read_ext::BufReadExt;
+use mime::Mime;
 
 /// A multipart part which is not a file (stored in memory)
 #[derive(Clone, Debug, PartialEq)]
@@ -150,9 +150,11 @@ pub fn read_multipart<S: Read>(
     always_use_files: bool)
     -> Result<Vec<Node>, Error>
 {
-    let mut reader = BufReader::with_capacity(4096, stream);
     let mut nodes: Vec<Node> = Vec::new();
+    let mut reader = BufReader::with_capacity(4096, stream);
 
+    let h_empty = httparse::EMPTY_HEADER.clone();
+    let mut header_memory = [h_empty; 64];
     let mut buf: Vec<u8> = Vec::new();
 
     let (_, found) = try!(reader.stream_until_token(b"\r\n\r\n", &mut buf));
@@ -162,10 +164,13 @@ pub fn read_multipart<S: Read>(
     buf.extend(b"\r\n\r\n".iter().cloned());
 
     // Parse the headers
-    let mut header_memory = [httparse::EMPTY_HEADER; 64];
     let headers = try!(match httparse::parse_headers(&buf, &mut header_memory) {
         Ok(httparse::Status::Complete((_, raw_headers))) => {
-            Headers::from_raw(raw_headers).map_err(|e| From::from(e))
+            let mut headers = Headers::new();
+            for rh in raw_headers {
+                headers.set_raw(rh.name, rh.value);
+            }
+            Ok(headers)
         },
         Ok(httparse::Status::Partial) => Err(Error::PartialHeaders),
         Err(err) => Err(From::from(err)),
@@ -260,7 +265,11 @@ fn inner<R: BufRead>(
             let mut header_memory = [httparse::EMPTY_HEADER; 4];
             try!(match httparse::parse_headers(&buf, &mut header_memory) {
                 Ok(httparse::Status::Complete((_, raw_headers))) => {
-                    Headers::from_raw(raw_headers).map_err(|e| From::from(e))
+                    let mut headers = Headers::new();
+                    for rh in raw_headers {
+                        headers.set_raw(rh.name, rh.value);
+                    }
+                    Ok(headers)
                 },
                 Ok(httparse::Status::Partial) => Err(Error::PartialHeaders),
                 Err(err) => Err(From::from(err)),
@@ -271,8 +280,7 @@ fn inner<R: BufRead>(
         let nested = {
             let ct: Option<&ContentType> = part_headers.get();
             if let Some(ct) = ct {
-                let &ContentType(Mime(ref top_level, _, _)) = ct;
-                *top_level == TopLevel::Multipart
+                ct.type_() == mime::MULTIPART
             } else {
                 false
             }
@@ -335,18 +343,17 @@ pub fn get_multipart_boundary(headers: &Headers) -> Result<Vec<u8>, Error> {
         Some(ct) => ct,
         None => return Err(Error::NoRequestContentType),
     };
-    let ContentType(ref mime) = *ct;
-    let Mime(ref top_level, _, ref params) = *mime;
+    let &ContentType(ref mime) = ct;
 
-    if *top_level != TopLevel::Multipart {
+    if mime.type_() != ::mime::MULTIPART {
         return Err(Error::NotMultipart);
     }
 
-    for &(ref attr, ref val) in params.iter() {
-        if let (&Attr::Boundary, &Value::Ext(ref val)) = (attr, val) {
-            let mut boundary = Vec::with_capacity(2 + val.len());
+    for (attr, ref val) in mime.params() {
+        if let ::mime::BOUNDARY = attr {
+            let mut boundary = Vec::with_capacity(2 + val.as_ref().len());
             boundary.extend(b"--".iter().cloned());
-            boundary.extend(val.as_bytes());
+            boundary.extend(val.as_ref().as_bytes());
             return Ok(boundary);
         }
     }

@@ -10,8 +10,8 @@ license = "MIT OR Apache-2.0"
 keywords = ["mime", "multipart", "mixed"]
 
 [dependencies]
-hyper = { version = "0.10", default-features = false }
-mime = "0.2"
+hyper = { version = "0.11", default-features = false }
+mime = "0.3"
 httparse = "1.2"
 tempdir = "0.3"
 textnonce = "0.6"

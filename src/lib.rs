@@ -15,6 +15,7 @@ extern crate textnonce;
 extern crate log;
 extern crate encoding;
 extern crate buf_read_ext;
+extern crate bytes;
 
 pub mod error;
 
@@ -153,9 +154,8 @@ pub fn read_multipart<S: Read>(
     let mut nodes: Vec<Node> = Vec::new();
     let mut reader = BufReader::with_capacity(4096, stream);
 
-    let h_empty = httparse::EMPTY_HEADER.clone();
-    let mut header_memory = [h_empty; 64];
     let mut buf: Vec<u8> = Vec::new();
+    let mut header_memory = [httparse::EMPTY_HEADER; 64];
 
     let (_, found) = try!(reader.stream_until_token(b"\r\n\r\n", &mut buf));
     if ! found { return Err(Error::EofInMainHeaders); }
@@ -164,12 +164,12 @@ pub fn read_multipart<S: Read>(
     buf.extend(b"\r\n\r\n".iter().cloned());
 
     // Parse the headers
+    {
     let headers = try!(match httparse::parse_headers(&buf, &mut header_memory) {
         Ok(httparse::Status::Complete((_, raw_headers))) => {
             let mut headers = Headers::new();
-            for rh in raw_headers {
-                headers.set_raw(rh.name, rh.value);
-            }
+            use ::bytes::Bytes as Bs;
+            headers.extend(raw_headers.iter().map(|rh| (rh.name, Bs::from(rh.value))));
             Ok(headers)
         },
         Ok(httparse::Status::Partial) => Err(Error::PartialHeaders),
@@ -177,6 +177,7 @@ pub fn read_multipart<S: Read>(
     });
 
     try!(inner(&mut reader, &headers, &mut nodes, always_use_files));
+    }
     Ok(nodes)
 }
 
@@ -266,9 +267,8 @@ fn inner<R: BufRead>(
             try!(match httparse::parse_headers(&buf, &mut header_memory) {
                 Ok(httparse::Status::Complete((_, raw_headers))) => {
                     let mut headers = Headers::new();
-                    for rh in raw_headers {
-                        headers.set_raw(rh.name, rh.value);
-                    }
+                    use ::bytes::Bytes as Bs;
+                    headers.extend(raw_headers.iter().map(|rh| (rh.name, Bs::from(rh.value))));
                     Ok(headers)
                 },
                 Ok(httparse::Status::Partial) => Err(Error::PartialHeaders),
